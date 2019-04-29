@@ -2,30 +2,34 @@
   hosts: k8s
   tasks:
 
-  - name: Enable EPEL
-    yum: 
-      name: epel-release
+# kube-apiserver uses dns to resolve nodes or hosts
+#  - name: Enable EPEL
+#    yum: 
+#      name: epel-release
+#
+#  - name: Install avahi mDNS
+#    yum:
+#      name:
+#      - avahi
+#      - avahi-tools
+#      - nss-mdns.x86_64
+#
+#
+#  - name: Enable and start avahi
+#    systemd:
+#      name: avahi-daemon
+#      state: started
+#      enabled: yes
 
-  - name: Install avahi mDNS
-    yum:
-      name:
-      - avahi
-      - avahi-tools
-      - nss-mdns.x86_64
-
-# nss-mdns.x86_64 already adds below
-#  - name: Enable mDNS in nsswitch
-#    lineinfile:
-#     path: /etc/nsswitch.conf
-#     regexp: '^hosts:      files dns myhostname'
-#     line: 'hosts:      files mdns4_minimal [NOTFOUND=return] dns myhostname'
-
-
-  - name: Enable and start avahi
-    systemd:
-      name: avahi-daemon
-      state: started
-      enabled: yes
+  - name: Add the inventory into /etc/hosts
+    lineinfile:
+      dest: /etc/hosts
+      regexp: '.*{{hostvars[item]["ansible_hostname"]}}.local$'
+      line: "{{ hostvars[item]['ansible_default_ipv4']['address'] }} {{hostvars[item]['ansible_hostname']}} {{hostvars[item]['ansible_hostname']}}.local"
+      state: present
+    when: hostvars[item]['ansible_facts']['default_ipv4'] is defined
+    with_items:
+      - "{{ groups['all'] }}"
 
   - name: Install NTP
     yum:
