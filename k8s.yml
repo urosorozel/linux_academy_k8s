@@ -1,0 +1,177 @@
+- name: Install dependencies on all hosts
+  hosts: k8s
+  tasks:
+
+  - name: Enable EPEL
+    yum: 
+      name: epel-release
+
+  - name: Install avahi mDNS
+    yum:
+      name:
+      - avahi
+      - avahi-tools
+      - nss-mdns.x86_64
+
+# nss-mdns.x86_64 already adds below
+#  - name: Enable mDNS in nsswitch
+#    lineinfile:
+#     path: /etc/nsswitch.conf
+#     regexp: '^hosts:      files dns myhostname'
+#     line: 'hosts:      files mdns4_minimal [NOTFOUND=return] dns myhostname'
+
+
+  - name: Enable and start avahi
+    systemd:
+      name: avahi-daemon
+      state: started
+      enabled: yes
+
+  - name: Install NTP
+    yum:
+      name: ntp
+
+  - name: Enable and start NTP
+    systemd:
+      name: ntpd
+      state: started
+      enabled: yes
+
+
+  - name: Add repository virt7-docker-common-release
+    yum_repository:
+      name: virt7-docker-common-release
+      description: virt7-docker-common-release
+      baseurl: http://cbs.centos.org/repos/virt7-docker-common-release/x86_64/os/
+      gpgcheck: no
+
+
+  - name: Install k8s 
+    yum:
+      name:
+       - etcd
+       - kubernetes
+       - docker
+      state: latest
+      enablerepo: virt7-docker-common-release
+  
+#- name: Install dependencies on all hosts
+#  hosts: k8s_master
+#  gather_facts: True
+#  tasks:
+
+  - name: Modify KUBE_MASTER hostname
+    lineinfile:
+     path: /etc/kubernetes/config
+     regexp: '^KUBE_MASTER="--master=http://(.*)"$'
+     line: 'KUBE_MASTER="--master=http://{{ hostvars[groups["k8s_masters"][0]]["ansible_hostname"] }}.local:8080"'
+     state: present
+
+
+  - name: Enable ETCD
+    lineinfile:
+     path: /etc/kubernetes/config
+     regexp: '^KUBE_ETCD_SERVERS="--etcd-servers=http://{{ hostvars[groups["k8s_masters"][0]]["ansible_hostname"] }}.local:2379"'
+     line: 'KUBE_ETCD_SERVERS="--etcd-servers=http://{{ hostvars[groups["k8s_masters"][0]]["ansible_hostname"] }}.local:2379"'
+     state: present
+
+
+- name: Configure k8s master 
+  hosts: k8s_masters
+  gather_facts: True
+  tasks:
+    - name: Kubeapi listen on all interfaces
+      lineinfile:
+       path: /etc/kubernetes/apiserver
+       regexp: '^KUBE_API_ADDRESS="(.*)"$'
+       line: 'KUBE_API_ADDRESS="--address=0.0.0.0"'
+       state: present
+  
+    - name: Kubeapi listen port
+      replace:
+       path: /etc/kubernetes/apiserver
+       regexp: '# (.*KUBE_API_PORT=.*)'
+       replace: '\1'
+  
+    - name: Set kublet port
+      replace:
+       path: /etc/kubernetes/apiserver
+       regexp: '# (.*KUBELET_PORT=.*)'
+       replace: '\1'
+  
+    - name: Disable admission control
+      replace:
+       path: /etc/kubernetes/apiserver
+       regexp: '(^KUBE_ADMISSION_CONTROL=.*)'
+       replace: '# \1'
+
+    - name: ETCD listen on all interfaces
+      lineinfile:
+       path: /etc/etcd/etcd.conf
+       regexp: '^ETCD_LISTEN_CLIENT_URLS="http://(.*):2379"$'
+       line: 'ETCD_LISTEN_CLIENT_URLS="http://0.0.0.0:2379"'
+       state: present
+  
+    - name: ETCD listen on all interfaces
+      lineinfile:
+       path: /etc/etcd/etcd.conf
+       regexp: '^ETCD_ADVERTISE_CLIENT_URLS="http://(.*):2379"$'
+       line: 'ETCD_ADVERTISE_CLIENT_URLS="http://0.0.0.0:2379"'
+       state: present
+
+    - name: Start kubernetes services
+      systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      with_items:
+        - etcd
+        - kube-apiserver
+        - kube-controller-manager
+        - kube-scheduler 
+
+- name: Configure k8s nodes
+  hosts: k8s_nodes
+  tasks:
+    - name: Kubelet listen on all interfaces
+      lineinfile:
+         path: /etc/kubernetes/kubelet 
+         regexp: '^KUBELET_ADDRESS="--address=(.*)"$'
+         line: 'KUBELET_ADDRESS="--address=0.0.0.0"'
+         state: present
+
+    - name: Set kubelet port 
+      replace:
+       path: /etc/kubernetes/apiserver
+       regexp: '# (.*KUBELET_PORT=.*)'
+       replace: '\1'
+
+    - name: Set kubelet hostname
+      lineinfile:
+         path: /etc/kubernetes/kubelet
+         regexp: '^KUBELET_HOSTNAME="--hostname-override=(.*)"$'
+         line: 'KUBELET_HOSTNAME="--hostname-override={{ ansible_hostname }}.local"'
+         state: present
+
+    - name: Set kubelet api server
+      lineinfile:
+         path: /etc/kubernetes/kubelet
+         regexp: '^KUBELET_API_SERVER="--api-servers=(.*)"$'
+         line: 'KUBELET_API_SERVER="--api-servers=http://{{ hostvars[groups["k8s_masters"][0]]["ansible_hostname"] }}.local:8080"'
+         state: present
+
+    - name: Disable kubelet pod infra repo
+      replace:
+       path: /etc/kubernetes/kubelet
+       regexp: '(.*KUBELET_POD_INFRA_CONTAINER=.*)'
+       replace: '# \1'
+
+    - name: Start kubernetes services on nodes
+      systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      with_items:
+        - kube-proxy
+        - kubelet
+        - docker
