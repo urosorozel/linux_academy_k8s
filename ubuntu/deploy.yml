@@ -1,0 +1,118 @@
+- name: Ubuntu 16 support
+  hosts: k8s
+  user: ubuntu
+  gather_facts: false
+  vars:
+    http_proxy:
+  pre_tasks:
+  - name: Install python2 for Ansible
+    raw: bash -c "test -e /usr/bin/python || ( export http_proxy={{http_proxy}};apt -qqy update && apt install -qqy python-minimal python2.7)"
+    register: output
+    changed_when:
+    - output.stdout != ""
+    - output.stdout != "\r\n"
+  - name: Gathering Facts
+    setup:
+
+  tasks:
+  - name: Create a new file for APT config
+    file: path=/etc/apt/apt.conf.d/10disable-auto-apt  state=touch
+
+  - name: Disable Automatic APT
+    lineinfile:
+      dest: /etc/apt/apt.conf.d/10disable-auto-apt
+      line: 'APT::Periodic::Enable "0";'
+      state: present
+
+  - name: Add an Apt signing key, uses whichever key is at the URL
+    apt_key:
+      url: "{{ item }}"
+      state: present
+    with_items:
+      - https://packages.cloud.google.com/apt/doc/apt-key.gpg 
+      - https://download.docker.com/linux/ubuntu/gpg
+
+  - name: Add docker repo
+    apt_repository:
+      repo: "{{ item }}"
+      state: present
+    with_items:
+      - "deb https://download.docker.com/linux/ubuntu bionic stable"
+      - "deb https://apt.kubernetes.io/ kubernetes-xenial main"
+
+  - name: Install packages 
+    apt:
+      name:
+        - docker-ce=18.06.1~ce~3-0~ubuntu
+        - kubelet=1.12.7-00
+        - kubeadm=1.12.7-00
+        - kubectl=1.12.7-00
+
+  - name: Add to sysctl.conf
+    sysctl:
+      name: net.bridge.bridge-nf-call-iptables
+      value: 1
+      state: present
+
+- name: K8S Master tasks
+  hosts: k8s-master0 
+  user: ubuntu
+  tasks:
+  - name: Run init
+    command: |
+      kubeadm init --pod-network-cidr=10.244.0.0/16
+    become: true
+    register: kubeadm
+    args:
+      creates: /etc/kubernetes/admin.conf
+
+  - name: Create kubectl config dir
+    file:
+      path: .kube
+      state: directory
+      mode: 0750
+    become: false
+    become_user: ubuntu
+
+  - name: Copy certificate
+    copy:
+      src: /etc/kubernetes/admin.conf
+      dest: /home/ubuntu/.kube/config
+      remote_src: yes
+
+  - name: Add kubectl auto complete
+    shell: |
+      kubectl completion bash >/etc/bash_completion.d/kubectl
+
+  - name: Waits for port 8080
+    wait_for:
+      host: 127.0.0.1
+      port: 8080
+      delay: 10
+      state: drained
+
+  - name: Check if flannell is deployes
+    shell: |
+      kubectl get pods -n kube-system| grep flanne
+    register: flannel
+    failed_when: false
+    changed_when: flannel.rc == 1
+    become: false
+    become_user: ubuntu
+
+  - name: Install flannel
+    command: |
+      kubectl apply -f https://raw.githubusercontent.com/coreos/flannel/bc79dd1505b0c8681ece4de4c0d86c5cd2643275/Documentation/kube-flannel.yml
+    become: false
+    become_user: ubuntu
+    when: flannel.changed
+
+- name: K8S Nodes
+  hosts: k8s_nodes
+  user: ubuntu
+  tasks:
+  - name: Run join
+    shell: |
+      echo "{{ hostvars['k8s-master0']['kubeadm']['stdout'] }}" | grep 'kubeadm join'| xargs -Ixx bash -c 'xx' 
+    args:
+      executable: /bin/bash
