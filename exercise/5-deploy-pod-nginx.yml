@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-uo
+  namespace: default
+spec:
+  containers:
+  - name: nginx-uo
+    image: nginx
+    imagePullPolicy: IfNotPresent
+  restartPolicy: Always

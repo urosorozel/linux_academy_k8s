@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: busy-config
+spec:
+  containers:
+  - name: busy-config
+    image: busybox
+    command: ["/bin/sh", "-c", "env"]
+    env:
+    - name: DEMO
+      valueFrom:
+        configMapKeyRef:
+          name: my-map
+          key: demo
+  restartPolicy: Never
